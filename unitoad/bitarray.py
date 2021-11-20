@@ -1,15 +1,17 @@
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from functools import partial, partialmethod, singledispatch, singledispatchmethod
+from functools import partialmethod, singledispatchmethod
 import itertools
-from typing import TYPE_CHECKING, Any, Callable, Generator, Iterable, NewType, Protocol, Sequence, runtime_checkable, Iterator
-from math import ceil, sin
+from typing import Any, Callable, Generator, Iterable, Sequence, SupportsBytes, SupportsIndex
+
 import operator
 import copy
 
 from unitoad.endian import BitOrdering, msb
 
-# if TYPE_CHECKING:
+__all__ = ['BitArray']
+
+def ceildiv(a, b):
+    return -(a // -b)
+
 class _BitArray(Sequence[bool]): ...
 
 class BitArray(_BitArray):
@@ -40,7 +42,8 @@ class BitArray(_BitArray):
         return len(self) % 8
     
     @singledispatchmethod
-    def __getitem__(self, index: int) -> bool:
+    def __getitem__(self, index: SupportsIndex) -> bool:
+        index = operator.index(index)
         if abs(index) > len(self):
             raise IndexError(f"index {index} outside bit array of length {len(self)}")
         idx, bit = divmod(index, 8)
@@ -50,18 +53,15 @@ class BitArray(_BitArray):
     @__getitem__.register
     def _(self, index: slice) -> _BitArray:
         indices = range(len(self))[index]
-        space = ceil(len(indices)/8)
+        space = ceildiv(len(indices),8)
         result = BitArray(bytearray(b'\0'*space), order=self.order, _len=len(indices))
         for i, j in enumerate(indices):
             result[i] = self[j]
         return result
 
-    @__getitem__.register
-    def _(self, index) -> bool:
-        return self[operator.index(index)]
-
     @singledispatchmethod
-    def __setitem__(self, index: int, value: bool) -> None:
+    def __setitem__(self, index: SupportsIndex, value: bool) -> None:
+        index = operator.index(index)
         if abs(index) > len(self):
             raise IndexError(f"index {index} outside bit array of length {len(self)}")
         idx, bit = divmod(index, 8)
@@ -76,10 +76,6 @@ class BitArray(_BitArray):
         indices = range(len(self))[index]
         for i, v in zip(indices, values):
             self[i] = v
-
-    @__setitem__.register
-    def _(self, index, value: bool) -> None:
-        self[operator.index(index)] = bool
     
     def __iter__(self) -> Generator[bool, None, None]:
         for i in range(len(self)):
@@ -99,31 +95,26 @@ class BitArray(_BitArray):
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({bytes(self)!r})"
     
-    def __rshift__(self, shift: int) -> _BitArray:
+    def __lshift__(self, shift: int) -> _BitArray:
         return self[shift:]
     
-    def __lshift__(self, shift: int) -> _BitArray:
+    def __rshift__(self, shift: int) -> _BitArray:
         byte, bits = divmod(shift, 8)
         if bits == 0:
             return BitArray(bytearray(b'0' * byte) + self.data, order=self.order, _len=len(self)+shift)
         else:
-            return self << 8*(byte+1) >> 8 - bits
+            return self >> 8*(byte+1) << 8 - bits
 
     @singledispatchmethod
-    def _iop(self, other: _BitArray, op: Callable[[Any,Any],Any], slack: bool) -> _BitArray:
+    def _iop(self, other: Iterable[SupportsIndex] | SupportsBytes, op: Callable[[Any,Any],Any], slack: bool) -> _BitArray:
+        for i, v in enumerate(bytes(other)):
+            self.data[i] = op(self.data[i], v)
+        return self
+    @_iop.register
+    def _(self, other: _BitArray, op: Callable[[Any,Any],Any], slack: bool) -> _BitArray:
         other._set_slack_bits(slack)
         for i, v in enumerate(other.data):
             self.data[i] = op(self.data[i], v)
-        return self
-    @_iop.register
-    def _(self, other: bytes, op: Callable[[int,int],int], slack: bool) -> _BitArray:
-        for i, v in enumerate(other.data):
-            self.data[i] = op(self.data[i], v)
-        return self
-    @_iop.register
-    def _(self, other: list, op: Callable[[int,int],int], slack: bool) -> _BitArray:
-        for i, v in enumerate(other.data):
-            self[i] = op(self[i], v)
         return self
 
     def _op(self, other: _BitArray, op: Callable[[Any,Any],Any], slack: bool) -> _BitArray:
@@ -137,9 +128,27 @@ class BitArray(_BitArray):
     __or__ = partialmethod(_op, op=operator.or_, slack=False)
 
     @singledispatchmethod
-    def __iadd__(self, other: _BitArray) -> _BitArray:
-        if self._num_slack():
-            self <<= self._num_slack()
+    def __iadd__(self, other: Iterable[SupportsIndex] | SupportsBytes) -> _BitArray:
+        slack = self._num_slack()
+        self >>= slack
+        self.data += bytes(other)
+        self._len += 8*len(other)
+        self <<= slack
+        return self
+    @__iadd__.register
+    def _(self, other: _BitArray) -> _BitArray:
+        slack = self._num_slack()
+        self >>= slack
+        self.data += other.data
+        self._len += len(other)
+        self <<= slack
+        return self
+
+
+    def __add__(self, other: _BitArray | Iterable[SupportsIndex] | SupportsBytes) -> _BitArray:
+        result = copy.copy(self)
+        result += other
+        return result
     
     def __copy__(self) -> _BitArray:
         return BitArray(copy.copy(self.data), order=self.order, _len=len(self))
