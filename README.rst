@@ -55,4 +55,6 @@ In this case, we entoad the first 30 bits as::
 
 
 TODO: How do we encode the end of a stream?
-Special semantics about the last character?
+We can probably encode it into the 'slack bits' of the final character of the stream,
+but there are cases where we can't tell if the final bits are slack or not - if the final byte boundary aligns perfectly with the end of the last character.
+
