@@ -32,20 +32,24 @@ class BitArray:
     def _set_slack_bits(self, value: bool):
         """Set the 'slack bits' in the array to a particular value.
         This does not change the formal value of the array, but allows some byte-wise computations to not need to special-case the last element."""
-        idx, num_slack = divmod(len(self), 8)
+        num_slack = self._num_slack()
         if num_slack == 0:
             return
-        for bit in range(8)[-num_slack:]:
+        for bit in range(8)[-num_slack :]:
             mask = self.order(bit)
             if value:
-                self.data[idx] |= mask
+                self.data[-1] |= mask
             else:
-                self.data[idx] &= ~mask
+                self.data[-1] &= ~mask
     
     def _num_slack(self) -> int:
-        return len(self) % 8
+        bytes, bits = divmod(len(self), 8)
+        if bits == 0:
+            return 0
+        else:
+            return 8 - bits
     
-    def __getitem__(self, index: SupportsIndex | slice) -> bool | 'BitArray':
+    def __getitem__(self, index: SupportsIndex | slice) -> bool | BitArray:
         if isinstance(index, slice):
             return self._getitem_slice(index)
         elif isinstance(index, SupportsIndex):
@@ -90,9 +94,9 @@ class BitArray:
         for i, v in zip(indices, values):
             self[i] = v
     
-    def __iter__(self) -> Generator[bool, None, None]:
-        for i in range(len(self)):
-            yield self[i]
+    # def __iter__(self) -> Generator[bool, None, None]:
+    #     for i in range(len(self)):
+    #         yield self[i]
     
     def __contains__(self, item:bool) -> bool:
         if item: # doing it a byte at a time instead of a bit at a time
@@ -108,27 +112,28 @@ class BitArray:
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({bytes(self)!r})"
     
-    def __lshift__(self, shift: int) -> _BitArray:
+    def __lshift__(self, shift: int) -> BitArray:
         return self[shift:]
     
-    def __rshift__(self, shift: int) -> 'BitArray':
+    def __rshift__(self, shift: int) -> BitArray:
         byte, bits = divmod(shift, 8)
         if bits == 0:
             return BitArray(b'\0'*byte + self.data, order=self.order, _len=len(self)+shift)
         else:
             return self >> 8*(byte+1) << 8 - bits
 
-    def _iop(self, other: 'BitArray' | Iterable[SupportsIndex] | SupportsBytes, op: Callable[[int,int],int], slack: bool) -> 'BitArray':
+    def _iop(self, other: 'BitArray' | Iterable[SupportsIndex] | SupportsBytes, op: Callable[[int,int],int], slack: bool) -> BitArray:
         if isinstance(other, BitArray):
             other._set_slack_bits(slack)
-            it = enumerate(other.data)
+            it = enumerate(zip(self.data, other.data))
         else:
-            it = enumerate(bytes(other))
-        for i, v in it:
-            self.data[i] = op(self.data[i], v)
+            it = enumerate(zip(self.data, bytes(other)))
+        
+        for i, (a, b) in it:
+            self.data[i] = op(a, b)
         return self
 
-    def _op(self, other: 'BitArray', op: Callable[[Any,Any],Any], slack: bool) -> 'BitArray':
+    def _op(self, other: 'BitArray', op: Callable[[Any,Any],Any], slack: bool) -> BitArray:
         return copy.copy(self)._iop(other, op, slack)
 
     __iand__ = partialmethod(_iop, op=operator.and_, slack=True)
@@ -138,7 +143,7 @@ class BitArray:
     __xor__ = partialmethod(_op, op=operator.xor, slack=False)
     __or__ = partialmethod(_op, op=operator.or_, slack=False)
 
-    def __iadd__(self, other: 'BitArray' | Iterable[SupportsIndex] | SupportsBytes) -> 'BitArray':
+    def __iadd__(self, other: 'BitArray' | Iterable[SupportsIndex] | SupportsBytes) -> BitArray:
         slack = self._num_slack()
         self >>= slack
         if isinstance(other, BitArray):
@@ -150,12 +155,12 @@ class BitArray:
         self <<= slack
         return self
 
-    def __add__(self, other: _BitArray | Iterable[SupportsIndex] | SupportsBytes) -> 'BitArray':
+    def __add__(self, other: BitArray | Iterable[SupportsIndex] | SupportsBytes) -> BitArray:
         result = copy.copy(self)
         result += other
         return result
     
-    def __copy__(self) -> _BitArray:
+    def __copy__(self) -> BitArray:
         return BitArray(copy.copy(self.data), order=self.order, _len=len(self))
     
     def pop(self) -> bool:

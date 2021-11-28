@@ -93,7 +93,7 @@ def test_iop(op, A, sA, B, sB):
     B_ref = make_bit_list(B, sB)
 
     A_arr = op(A_arr, B_arr)
-    A_ref = [op(a, b) for a, b in zip_longest(A_ref, B_ref, fillvalue=True)]
+    A_ref = [op(a, b) for a, b in zip(A_ref, B_ref)] + A_ref[len(B_ref):]
     assert_sequences_equal(A_arr, A_ref)
 
 @pytest.mark.parametrize('A, sA, B, sB', product(short_test_data, range(8), short_test_data, range(8)))
